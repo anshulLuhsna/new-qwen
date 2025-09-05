@@ -83,9 +83,10 @@ class QwenVoiceAgent:
             self.model_name,
             torch_dtype="auto",
             device_map="auto",
-            # trust_remote_code is safe here since we’re on the preview branch; keep True for Omni extras.
+            # trust_remote_code is safe here since we're on the preview branch; keep True for Omni extras.
             trust_remote_code=True,
             attn_implementation=attn_impl,
+            enable_audio_output=True,   # <-- add this
         )
 
         # The Talker (audio output module) is enabled by default.
@@ -103,40 +104,29 @@ class QwenVoiceAgent:
         print("[voice_agent] Qwen 2.5 Omni model loaded successfully.")
 
     def _generate_response(self, conversation):
-        """
-        Internal helper method to process a conversation and generate a response (text + audio).
-        """
-        text_prompt = self.processor.apply_chat_template(
-            conversation, add_generation_prompt=True, tokenize=False
-        )
-        audios, images, videos = process_mm_info(conversation)
-
-        inputs = self.processor(
-            text=text_prompt, audio=audios, images=images, videos=videos,
-            return_tensors="pt", padding=True
+        # Build inputs exactly as in the docs (uses tokenizer + returns tensors)
+        inputs = self.processor.apply_chat_template(
+            conversation,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+            padding=True,
         ).to(self.model.device)
 
-        # Generate both text and audio
+        # Generate text + audio. IMPORTANT: use spk= and unpack tuple.
         with torch.inference_mode():
-            outputs = self.model.generate(
+            text_ids, audio = self.model.generate(
                 **inputs,
-                speaker=self.speaker,
-                return_audio=True,  # explicitly request audio output
+                spk=self.speaker,      # <- correct arg for voice ("Chelsie" or "Ethan")
+                return_audio=True
             )
 
-        # For the new Qwen Omni API, outputs is a dict
-        if isinstance(outputs, dict):
-            text_ids = outputs.get("text", None)
-            audio = outputs.get("audios", None)
-        else:
-            # Fallback for legacy behavior
-            text_ids, audio = outputs
-
+        # Decode text and convert audio to numpy for saving/serialization
         response_text = self.processor.batch_decode(
             text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )
-
-        return response_text, audio.detach().cpu().numpy() if audio is not None else None
+        return response_text, audio.detach().cpu().numpy()
 
     def speak_from_text(self, user_text: str):
         """
