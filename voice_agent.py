@@ -104,7 +104,10 @@ class QwenVoiceAgent:
         )
 
         # System prompt enabling audio output; keep brief to reduce token overhead
-        self.system_prompt = {"role": "system", "content": "you are a voice agent"}
+        self.system_prompt = {
+            "role": "system",
+            "content": "You are Qwen. Always reply in English. Keep answers under one sentence. Generate both text and speech."
+        }
 
         print("[voice_agent] Qwen 2.5 Omni model loaded successfully.")
 
@@ -127,7 +130,19 @@ class QwenVoiceAgent:
 
         with torch.inference_mode():
             # Qwen Omni: generate returns (text_ids, audio) by default
-            text_ids, audio = self.model.generate(**inputs, max_new_tokens=64)
+            text_ids, audio = self.model.generate(
+                **inputs,
+                # voice (optional)
+                # spk="Chelsie",  # or "Ethan" (supported by the checkpoint)
+                # text (Thinker) controls:
+                thinker_max_new_tokens=48,       # shorter text
+                thinker_no_repeat_ngram_size=3,  # cut loops
+                thinker_repetition_penalty=1.1,  # mild anti-repeat
+                thinker_temperature=0.7,         # conservative sampling
+                thinker_top_p=0.8,               # balanced diversity
+                # You can also tune Talker (audio) sampling separately if needed:
+                # talker_do_sample=True,
+            )
 
         response_text = self.processor.batch_decode(
             text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
@@ -149,7 +164,19 @@ class QwenVoiceAgent:
         ).to(self.model.device)
 
         with torch.inference_mode():
-            text_ids, audio = self.model.generate(**inputs, max_new_tokens=64)
+            text_ids, audio = self.model.generate(
+                **inputs,
+                # voice (optional)
+                # spk="Chelsie",  # or "Ethan" (supported by the checkpoint)
+                # text (Thinker) controls:
+                thinker_max_new_tokens=48,       # shorter text
+                thinker_no_repeat_ngram_size=3,  # cut loops
+                thinker_repetition_penalty=1.1,  # mild anti-repeat
+                thinker_temperature=0.7,         # conservative sampling
+                thinker_top_p=0.8,               # balanced diversity
+                # You can also tune Talker (audio) sampling separately if needed:
+                # talker_do_sample=True,
+            )
 
         response_text = self.processor.batch_decode(
             text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
