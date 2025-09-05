@@ -127,7 +127,7 @@ class QwenVoiceAgent:
 
         with torch.inference_mode():
             # Qwen Omni: generate returns (text_ids, audio) by default
-            text_ids, audio = self.model.generate(**inputs)
+            text_ids, audio = self.model.generate(**inputs, max_new_tokens=64)
 
         response_text = self.processor.batch_decode(
             text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
@@ -149,7 +149,7 @@ class QwenVoiceAgent:
         ).to(self.model.device)
 
         with torch.inference_mode():
-            text_ids, audio = self.model.generate(**inputs)
+            text_ids, audio = self.model.generate(**inputs, max_new_tokens=64)
 
         response_text = self.processor.batch_decode(
             text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
