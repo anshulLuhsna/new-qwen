@@ -14,6 +14,7 @@
 # Everything else (API shape, speak_from_text/audio) is unchanged.
 
 import os
+import traceback
 import torch
 import soundfile as sf
 from transformers import Qwen2_5OmniForConditionalGeneration, Qwen2_5OmniProcessor
@@ -109,14 +110,20 @@ class QwenVoiceAgent:
 
     def _generate_response(self, conversation):
         # For Qwen Omni, prefer the tokenized chat-template path:
-        inputs = self.processor.apply_chat_template(
-            conversation,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt",
-            padding=True,
-        ).to(self.model.device)
+        try:
+            inputs = self.processor.apply_chat_template(
+                conversation,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+                padding=True,
+            ).to(self.model.device)
+        except Exception:
+            print("[voice_agent] apply_chat_template failed. Conversation dump follows:", flush=True)
+            print(conversation, flush=True)
+            traceback.print_exc()
+            raise
 
         with torch.inference_mode():
             # Qwen Omni: use 'spk' for voice; generate returns (text_ids, audio) when return_audio=True
@@ -132,17 +139,35 @@ class QwenVoiceAgent:
 
         audio_np = audio.detach().cpu().numpy() if audio is not None else None
         return response_text, audio_np
+
+    def _generate_from_text_only(self, user_text: str):
+        """
+        Faster, safer path for text-only input using the processor(text=...) API.
+        Avoids chat-template internals that can error with 'string indices...'.
+        """
+        # Build inputs per Qwen model card style (no chat template)
+        inputs = self.processor(
+            text=[user_text],  # batch of 1
+            return_tensors="pt",
+            padding=True,
+        ).to(self.model.device)
+
+        with torch.inference_mode():
+            text_ids, audio = self.model.generate(
+                **inputs,
+                spk=self.speaker,   # "Chelsie" or "Ethan"
+                return_audio=True,
+            )
+
+        response_text = self.processor.batch_decode(
+            text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
+        )
+        audio_np = audio.detach().cpu().numpy() if audio is not None else None
+        return response_text, audio_np
     
     def speak_from_text(self, user_text: str):
-        """
-        Generates a voice reply from a text input.
-        Returns: (response_text: str|list, audio: np.ndarray|None)
-        """
-        conversation = [
-            self.system_prompt,  # keep as before
-            {"role": "user", "content": user_text},   # <-- IMPORTANT: plain string, not [{"type":"text",...}]
-        ]
-        return self._generate_response(conversation)
+        # Text-only → avoid chat template entirely
+        return self._generate_from_text_only(user_text)
 
     def speak_from_audio(self, user_audio_file: str):
         """

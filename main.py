@@ -4,6 +4,7 @@ import base64
 import io
 import os
 import tempfile
+import traceback
 from typing import Tuple
 
 import soundfile as sf
@@ -100,6 +101,7 @@ async def respond_to_text(request: TextRequest):
     except HTTPException:
         raise
     except Exception as e:
+        traceback.print_exc()
         print(f"Error processing text request: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -136,6 +138,7 @@ async def respond_to_audio(audio_file: UploadFile = File(...)):
     except HTTPException:
         raise
     except Exception as e:
+        traceback.print_exc()
         print(f"Error processing audio request: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
