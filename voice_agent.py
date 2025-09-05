@@ -43,7 +43,7 @@ class QwenVoiceAgent:
         # This system prompt is MANDATORY for enabling audio output
         self.system_prompt = {
             "role": "system",
-            "content":
+            "content": "you are a voice agent"
         }
         print("Qwen 2.5 Omni model loaded successfully.")
 
