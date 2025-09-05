@@ -1,55 +1,110 @@
 # /workspace/voice_agent.py
+#
+# CHANGES (compared to your original):
+# 1) Default model_name now points to a LOCAL DIR under /workspace (no hub fetch).
+#    You can override with env QWEN_MODEL_DIR if you store it elsewhere.
+# 2) Attention impl is chosen dynamically:
+#      - USE_FLASH_ATTENTION_2=1 + flash_attn importable -> "flash_attention_2"
+#      - otherwise -> "sdpa"
+# 3) Safer init: no heavy work at module import time; prints clearer diagnostics.
+# 4) Optional small perf tweak: torch.set_float32_matmul_precision('high')
+# 5) Generation wrapped in inference_mode(); explicit return_audio=True preserved.
+# 6) A couple of validations (speaker name, local directory exists).
+#
+# Everything else (API shape, speak_from_text/audio) is unchanged.
 
+import os
 import torch
 import soundfile as sf
-import os
 from transformers import Qwen2_5OmniForConditionalGeneration, Qwen2_5OmniProcessor
 from qwen_omni_utils import process_mm_info
 
+# Prefer persistent local snapshot (adjust with env if needed)
+DEFAULT_LOCAL_MODEL_DIR = os.environ.get("QWEN_MODEL_DIR", "/workspace/models/Qwen2.5-Omni-7B")
+
+# Optional minor perf tweak on Ampere+:
+try:
+    torch.set_float32_matmul_precision("high")
+except Exception:
+    pass
+
+
+def _pick_attn_impl() -> str:
+    """Choose attention backend based on environment and availability."""
+    use_fa2 = os.environ.get("USE_FLASH_ATTENTION_2", "0") == "1"
+    if use_fa2:
+        try:
+            import flash_attn  # noqa: F401
+            return "flash_attention_2"
+        except Exception:
+            print("[voice_agent] USE_FLASH_ATTENTION_2=1 but flash-attn not importable; falling back to SDPA.")
+    return "sdpa"
+
+
 class QwenVoiceAgent:
     """
-    A voice agent powered by the Qwen 2.5 Omni 7B model, capable of
-    speech-in and speech-out interactions.
+    A voice agent powered by the Qwen 2.5 Omni 7B model, capable of speech-in and speech-out interactions.
     """
-    def __init__(self, model_name="Qwen/Qwen2.5-Omni-7B", speaker="Chelsie"):
+
+    # Qwen demo voices; adjust/extend if you have custom voices
+    _allowed_speakers = {"Chelsie", "Ethan"}
+
+    def __init__(self, model_name: str = DEFAULT_LOCAL_MODEL_DIR, speaker: str = "Chelsie"):
         """
         Initializes the agent by loading the model and processor.
 
         Args:
-            model_name (str): The Hugging Face model identifier.
-            speaker (str): The default voice for audio output ('Chelsie' or 'Ethan').
+            model_name: Local directory OR HF repo id. We default to local dir to avoid network.
+            speaker: Default TTS voice ('Chelsie' or 'Ethan').
         """
-        print(f"Loading {model_name}. This may take several minutes...")
-        
+        print(f"[voice_agent] Loading model from: {model_name}")
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model_name = model_name
         self.speaker = speaker
 
-        # Load the model with optimizations for A100/H100
+        if self.speaker not in self._allowed_speakers:
+            print(f"[voice_agent] Warning: speaker '{self.speaker}' not in {self._allowed_speakers}. Using 'Chelsie'.")
+            self.speaker = "Chelsie"
+
+        # If pointing to a local directory, sanity-check it
+        if os.path.isdir(self.model_name):
+            # Make sure at least config.json exists
+            cfg_path = os.path.join(self.model_name, "config.json")
+            if not os.path.isfile(cfg_path):
+                raise FileNotFoundError(
+                    f"[voice_agent] Local model dir looks incomplete: {self.model_name} (missing config.json)"
+                )
+
+        attn_impl = _pick_attn_impl()
+        print(f"[voice_agent] Device: {self.device} | attn_implementation: {attn_impl}")
+
+        # Load the model (no network if model_name is a local directory)
         self.model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
             self.model_name,
             torch_dtype="auto",
             device_map="auto",
+            # trust_remote_code is safe here since we’re on the preview branch; keep True for Omni extras.
             trust_remote_code=True,
-            attn_implementation="flash_attention_2"
+            attn_implementation=attn_impl,
         )
-        
+
         # The Talker (audio output module) is enabled by default.
-        # To disable it and save ~2GB VRAM for text-only tasks, you could call:
+        # If you need to save ~2GB VRAM for text-only:
         # self.model.disable_talker()
 
-        self.processor = Qwen2_5OmniProcessor.from_pretrained(self.model_name, trust_remote_code=True)
+        self.processor = Qwen2_5OmniProcessor.from_pretrained(
+            self.model_name,
+            trust_remote_code=True,
+        )
 
-        # This system prompt is MANDATORY for enabling audio output
-        self.system_prompt = {
-            "role": "system",
-            "content": "you are a voice agent"
-        }
-        print("Qwen 2.5 Omni model loaded successfully.")
+        # System prompt enabling audio output; keep brief to reduce token overhead
+        self.system_prompt = {"role": "system", "content": "you are a voice agent"}
+
+        print("[voice_agent] Qwen 2.5 Omni model loaded successfully.")
 
     def _generate_response(self, conversation):
         """
-        Internal helper method to process a conversation and generate a response.
+        Internal helper method to process a conversation and generate a response (text + audio).
         """
         text_prompt = self.processor.apply_chat_template(
             conversation, add_generation_prompt=True, tokenize=False
@@ -62,85 +117,78 @@ class QwenVoiceAgent:
         ).to(self.model.device)
 
         # Generate both text and audio
-        text_ids, audio = self.model.generate(
-            **inputs,
-            speaker=self.speaker,
-            return_audio=True # Explicitly request audio output
-        )
+        with torch.inference_mode():
+            text_ids, audio = self.model.generate(
+                **inputs,
+                speaker=self.speaker,
+                return_audio=True,  # explicitly request audio output
+            )
 
         response_text = self.processor.batch_decode(
             text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )
 
-        return response_text, audio.cpu().numpy()
+        # Return numpy for easy saving; most backends expect mono @ 24k
+        return response_text, audio.detach().cpu().numpy()
 
-    def speak_from_text(self, user_text):
+    def speak_from_text(self, user_text: str):
         """
         Generates a voice reply from a text input.
-
-        Args:
-            user_text (str): The text input from the user.
-
-        Returns:
-            tuple: A tuple containing the response text (str) and audio (numpy array).
+        Returns: (response_text: str, audio: np.ndarray)
         """
         conversation = [
             self.system_prompt,
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": user_text}]
-            }
+            {"role": "user", "content": [{"type": "text", "text": user_text}]},
         ]
         return self._generate_response(conversation)
 
-    def speak_from_audio(self, user_audio_file):
+    def speak_from_audio(self, user_audio_file: str):
         """
         Generates a voice reply from an audio file input.
-
-        Args:
-            user_audio_file (str): Path to the user's audio file.
-
-        Returns:
-            tuple: A tuple containing the response text (str) and audio (numpy array).
+        Returns: (response_text: str, audio: np.ndarray)
         """
+        if not os.path.isfile(user_audio_file):
+            raise FileNotFoundError(f"Audio file not found: {user_audio_file}")
+
         conversation = [
             self.system_prompt,
-            {
-                "role": "user",
-                "content": [{"type": "audio", "audio": user_audio_file}]
-            }
+            {"role": "user", "content": [{"type": "audio", "audio": user_audio_file}]},
         ]
         return self._generate_response(conversation)
+
 
 if __name__ == "__main__":
     # Example usage for interactive command-line testing
     agent = QwenVoiceAgent()
-    
+
     print("\n--- Qwen 2.5 Omni Voice Agent ---")
     print("Enter text to get a spoken response.")
     print("To use an audio file, type: audio:/path/to/your/audio.wav")
     print("Type 'exit' to quit.\n")
 
     while True:
-        user_input = input("You: ")
+        try:
+            user_input = input("You: ")
+        except (EOFError, KeyboardInterrupt):
+            break
+
         if user_input.lower() == "exit":
             break
 
         try:
             if user_input.lower().startswith("audio:"):
                 file_path = user_input[6:].strip()
-                if not os.path.isfile(file_path):
-                    print("System: Audio file not found. Please provide a valid path.")
-                    continue
                 print("System: Processing audio input...")
                 reply, audio_out = agent.speak_from_audio(file_path)
             else:
                 print("System: Processing text input...")
                 reply, audio_out = agent.speak_from_text(user_input)
 
-            print(f"Agent: {reply}")
+            # reply is a list for batch_decode; take first element for convenience
+            reply_text = reply[0] if isinstance(reply, (list, tuple)) else reply
+            print(f"Agent: {reply_text}")
 
-            # Save the agent's spoken response for verification
+            # Save the agent's spoken response for verification (24 kHz mono)
             output_filename = "agent_reply.wav"
             sf.write(output_filename, audio_out.reshape(-1), samplerate=24000)
             print(f"System: Voice reply saved to {output_filename}\n")
