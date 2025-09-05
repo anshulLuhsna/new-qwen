@@ -108,9 +108,9 @@ class QwenVoiceAgent:
             "role": "system",
             "content": (
                 "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, "
-                "capable of perceiving auditory and visual inputs, as well as generating text and speech."
-                " Always reply in English. Keep answers under one sentence."
-            ),
+                "capable of perceiving auditory and visual inputs, as well as generating text and speech. "
+                "Always reply in English. Keep answers under one sentence."
+            )
         }
 
         print("[voice_agent] Qwen 2.5 Omni model loaded successfully.")
@@ -137,16 +137,18 @@ class QwenVoiceAgent:
             text_ids, audio = self.model.generate(
                 **inputs,
 
-                # TEXT (Thinker): short + deterministic + de-looped
-                thinker_do_sample=False,
-                thinker_max_new_tokens=32,        # 24–48 is a good range
-                thinker_no_repeat_ngram_size=3,   # stops phrase loops
-                # thinker_repetition_penalty=1.1, # optional; mild penalty
+                # TEXT (Thinker) — short, deterministic, no loops
+                thinker_do_sample=False,          # greedy = fastest, most stable
+                thinker_max_new_tokens=24,        # keep answers tiny (16–32 is a good band)
+                thinker_no_repeat_ngram_size=3,   # stop phrase loops
 
-                # AUDIO (Talker): intelligible prosody
-                talker_do_sample=True,            # natural speech
-                talker_temperature=0.65,          # lower → clearer
-                talker_top_p=0.9,                 # balanced variety
+                # AUDIO (Talker) — clear speech with minimal randomness
+                talker_do_sample=True,            # a bit of randomness helps prosody
+                talker_temperature=0.6,           # lower = clearer and faster convergence
+                talker_top_p=0.9,                 # balanced diversity
+
+                # Leave out spk for now if your current build rejects it
+                # spk="Chelsie",  # add back only after you upgrade Transformers
             )
 
         response_text = self.processor.batch_decode(
@@ -173,16 +175,18 @@ class QwenVoiceAgent:
             text_ids, audio = self.model.generate(
                 **inputs,
 
-                # TEXT (Thinker): short + deterministic + de-looped
-                thinker_do_sample=False,
-                thinker_max_new_tokens=32,        # 24–48 is a good range
-                thinker_no_repeat_ngram_size=3,   # stops phrase loops
-                # thinker_repetition_penalty=1.1, # optional; mild penalty
+                # TEXT (Thinker) — short, deterministic, no loops
+                thinker_do_sample=False,          # greedy = fastest, most stable
+                thinker_max_new_tokens=24,        # keep answers tiny (16–32 is a good band)
+                thinker_no_repeat_ngram_size=3,   # stop phrase loops
 
-                # AUDIO (Talker): intelligible prosody
-                talker_do_sample=True,            # natural speech
-                talker_temperature=0.65,          # lower → clearer
-                talker_top_p=0.9,                 # balanced variety
+                # AUDIO (Talker) — clear speech with minimal randomness
+                talker_do_sample=True,            # a bit of randomness helps prosody
+                talker_temperature=0.6,           # lower = clearer and faster convergence
+                talker_top_p=0.9,                 # balanced diversity
+
+                # Leave out spk for now if your current build rejects it
+                # spk="Chelsie",  # add back only after you upgrade Transformers
             )
 
         response_text = self.processor.batch_decode(
