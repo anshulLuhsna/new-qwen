@@ -108,13 +108,7 @@ class QwenVoiceAgent:
         print("[voice_agent] Qwen 2.5 Omni model loaded successfully.")
 
     def _generate_response(self, conversation):
-        """
-        Process a conversation and generate (text, audio). Adds verbose logging and
-        supports both tuple and dict return forms from model.generate().
-        """
-
-        # Build inputs via the processor; this path is used in the official docs
-        # and avoids manual audio/image/video splitting for text-only prompts.
+        # For Qwen Omni, prefer the tokenized chat-template path:
         inputs = self.processor.apply_chat_template(
             conversation,
             add_generation_prompt=True,
@@ -124,73 +118,29 @@ class QwenVoiceAgent:
             padding=True,
         ).to(self.model.device)
 
-        _log(f"inputs keys: {list(inputs.keys())}; device: {self.model.device}")
-
-        # Generate. Qwen Omni expects 'spk' for voice choice.
         with torch.inference_mode():
-            outputs = self.model.generate(
+            # Qwen Omni: use 'spk' for voice; generate returns (text_ids, audio) when return_audio=True
+            text_ids, audio = self.model.generate(
                 **inputs,
-                spk=self.speaker,     # (Chelsie|Ethan) per Qwen Omni docs
-                return_audio=True
+                spk=self.speaker,
+                return_audio=True,
             )
 
-        # Robustly unpack outputs (tuple or dict), with detailed logging.
-        text_ids = None
-        audio = None
-
-        if isinstance(outputs, tuple):
-            _log(f"generate() returned tuple of len={len(outputs)}; types={[type(x) for x in outputs]}")
-            if len(outputs) == 2:
-                text_ids, audio = outputs
-            else:
-                raise RuntimeError(f"Unexpected tuple length from generate(): {len(outputs)}")
-        elif isinstance(outputs, dict):
-            _log(f"generate() returned dict with keys={list(outputs.keys())}")
-            # Common keys observed in preview builds
-            text_ids = outputs.get("text", outputs.get("text_ids"))
-            audio = outputs.get("audio", outputs.get("audios"))
-            if text_ids is None:
-                raise RuntimeError("generate() dict missing text/text_ids")
-            if audio is None:
-                _log("generate() dict missing audio/audios; continuing with text only.")
-        else:
-            raise RuntimeError(f"Unexpected type from generate(): {type(outputs)}")
-
-        # Log tensor info before decoding
-        try:
-            _log(f"text_ids type={type(text_ids)}; audio type={type(audio)}")
-            if hasattr(text_ids, "shape"):
-                _log(f"text_ids.shape={getattr(text_ids, 'shape', None)}")
-            if hasattr(audio, "shape"):
-                _log(f"audio.shape={getattr(audio, 'shape', None)}")
-        except Exception as e:
-            _log(f"shape logging error: {e}")
-
-        # Decode text
         response_text = self.processor.batch_decode(
             text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )
 
-        # Convert audio tensor -> numpy (if present)
-        audio_np = None
-        if audio is not None:
-            try:
-                audio_np = audio.detach().cpu().numpy()
-            except Exception as e:
-                _log(f"audio detach/cpu/numpy failed: {e}")
-                audio_np = None
-
-        _log(f"decoded text count={len(response_text)}; has_audio={audio_np is not None}")
+        audio_np = audio.detach().cpu().numpy() if audio is not None else None
         return response_text, audio_np
     
     def speak_from_text(self, user_text: str):
         """
         Generates a voice reply from a text input.
-        Returns: (response_text: str, audio: np.ndarray)
+        Returns: (response_text: str|list, audio: np.ndarray|None)
         """
         conversation = [
-            self.system_prompt,
-            {"role": "user", "content": [{"type": "text", "text": user_text}]},
+            self.system_prompt,  # keep as before
+            {"role": "user", "content": user_text},   # <-- IMPORTANT: plain string, not [{"type":"text",...}]
         ]
         return self._generate_response(conversation)
 
