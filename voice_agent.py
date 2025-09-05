@@ -106,7 +106,11 @@ class QwenVoiceAgent:
         # System prompt enabling audio output; keep brief to reduce token overhead
         self.system_prompt = {
             "role": "system",
-            "content": "You are Qwen. Always reply in English. Keep answers under one sentence. Generate both text and speech."
+            "content": (
+                "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, "
+                "capable of perceiving auditory and visual inputs, as well as generating text and speech. "
+                "Always reply in English. Keep answers under one sentence."
+            )
         }
 
         print("[voice_agent] Qwen 2.5 Omni model loaded successfully.")
@@ -129,19 +133,24 @@ class QwenVoiceAgent:
             raise
 
         with torch.inference_mode():
-            # Qwen Omni: generate returns (text_ids, audio) by default
+            # Generate with separate Thinker (text) & Talker (audio) controls
             text_ids, audio = self.model.generate(
                 **inputs,
-                # voice (optional)
-                # spk="Chelsie",  # or "Ethan" (supported by the checkpoint)
-                # text (Thinker) controls:
-                thinker_max_new_tokens=48,       # shorter text
-                thinker_no_repeat_ngram_size=3,  # cut loops
-                thinker_repetition_penalty=1.1,  # mild anti-repeat
-                thinker_temperature=0.7,         # conservative sampling
-                thinker_top_p=0.8,               # balanced diversity
-                # You can also tune Talker (audio) sampling separately if needed:
-                # talker_do_sample=True,
+
+                # --- TEXT controls (Thinker) ---
+                thinker_do_sample=False,          # deterministic, crisp text
+                thinker_max_new_tokens=32,        # keep it short
+                thinker_no_repeat_ngram_size=3,   # stop loops
+                # (optional) thinker_repetition_penalty=1.1,
+
+                # --- AUDIO controls (Talker) ---
+                talker_do_sample=True,            # allow natural prosody
+                talker_temperature=0.7,           # lower = clearer, less "gibberish"
+                talker_top_p=0.9,
+                # (optional) talker_repetition_penalty=1.0,
+
+                # --- Voice selection ---
+                spk="Chelsie",  # or "Ethan"
             )
 
         response_text = self.processor.batch_decode(
@@ -164,18 +173,24 @@ class QwenVoiceAgent:
         ).to(self.model.device)
 
         with torch.inference_mode():
+            # Generate with separate Thinker (text) & Talker (audio) controls
             text_ids, audio = self.model.generate(
                 **inputs,
-                # voice (optional)
-                # spk="Chelsie",  # or "Ethan" (supported by the checkpoint)
-                # text (Thinker) controls:
-                thinker_max_new_tokens=48,       # shorter text
-                thinker_no_repeat_ngram_size=3,  # cut loops
-                thinker_repetition_penalty=1.1,  # mild anti-repeat
-                thinker_temperature=0.7,         # conservative sampling
-                thinker_top_p=0.8,               # balanced diversity
-                # You can also tune Talker (audio) sampling separately if needed:
-                # talker_do_sample=True,
+
+                # --- TEXT controls (Thinker) ---
+                thinker_do_sample=False,          # deterministic, crisp text
+                thinker_max_new_tokens=32,        # keep it short
+                thinker_no_repeat_ngram_size=3,   # stop loops
+                # (optional) thinker_repetition_penalty=1.1,
+
+                # --- AUDIO controls (Talker) ---
+                talker_do_sample=True,            # allow natural prosody
+                talker_temperature=0.7,           # lower = clearer, less "gibberish"
+                talker_top_p=0.9,
+                # (optional) talker_repetition_penalty=1.0,
+
+                # --- Voice selection ---
+                spk="Chelsie",  # or "Ethan"
             )
 
         response_text = self.processor.batch_decode(
