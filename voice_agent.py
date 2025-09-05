@@ -118,18 +118,25 @@ class QwenVoiceAgent:
 
         # Generate both text and audio
         with torch.inference_mode():
-            text_ids, audio = self.model.generate(
+            outputs = self.model.generate(
                 **inputs,
                 speaker=self.speaker,
                 return_audio=True,  # explicitly request audio output
             )
 
+        # For the new Qwen Omni API, outputs is a dict
+        if isinstance(outputs, dict):
+            text_ids = outputs.get("text", None)
+            audio = outputs.get("audios", None)
+        else:
+            # Fallback for legacy behavior
+            text_ids, audio = outputs
+
         response_text = self.processor.batch_decode(
             text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )
 
-        # Return numpy for easy saving; most backends expect mono @ 24k
-        return response_text, audio.detach().cpu().numpy()
+        return response_text, audio.detach().cpu().numpy() if audio is not None else None
 
     def speak_from_text(self, user_text: str):
         """
